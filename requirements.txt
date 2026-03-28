@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+google-cloud-discoveryengine
+google-api-core
+google-auth
+google-genai
+python-dotenv
+python-docx
+pdfplumber
+python-multipart
