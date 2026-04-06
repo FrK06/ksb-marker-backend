@@ -9,7 +9,10 @@ from google.genai import types
 import pdfplumber
 from docx import Document as DocxDocument
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AIzaSyBV1HSN9CwerDCIVoAW2C85JiekaYzYtJg")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+if not GEMINI_API_KEY:
+    raise ValueError("Environment variable 'GEMINI_API_KEY' is not set")
+
 client_genai = genai.Client(api_key=GEMINI_API_KEY)
 
 app = FastAPI()
