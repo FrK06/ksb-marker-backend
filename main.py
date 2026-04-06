@@ -1,17 +1,24 @@
-import os, json, tempfile
+import os, json, tempfile, subprocess
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from typing import Any
 from google import genai
+from google.genai import types
 import pdfplumber
 from docx import Document as DocxDocument
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AIzaSyC06w-qKo8adQZKAzwSMc1t1vNKaIk7FT8")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AIzaSyBV1HSN9CwerDCIVoAW2C85JiekaYzYtJg")
 client_genai = genai.Client(api_key=GEMINI_API_KEY)
 
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+class FeedbackRequest(BaseModel):
+    results: dict
+    feedback_type: str
+    learner_name: str = "the learner"
 
 # ── KSB Rubrics ──────────────────────────────────────────────────────────────
 
@@ -79,9 +86,42 @@ MODULES = {
     "AIDI": {"name": "AI & Digital Innovation", "ksbs": AIDI_RUBRIC},
 }
 
-# ── Document extraction ───────────────────────────────────────────────────────
+# ── Document conversion & extraction ─────────────────────────────────────────
+
+def convert_docx_to_pdf(docx_path: str) -> str:
+    """
+    Convert DOCX to PDF using LibreOffice headless mode.
+    Preserves full page layout: images, charts, diagrams, code, tables.
+    """
+    output_dir = str(Path(docx_path).parent)
+
+    result = subprocess.run(
+        [
+            "soffice",
+            "--headless",
+            "--norestore",
+            "--convert-to", "pdf",
+            "--outdir", output_dir,
+            docx_path
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120
+    )
+
+    if result.returncode != 0:
+        raise RuntimeError(f"DOCX to PDF conversion failed: {result.stderr}")
+
+    pdf_path = str(Path(docx_path).with_suffix(".pdf"))
+
+    if not Path(pdf_path).exists():
+        raise RuntimeError("PDF file was not created by LibreOffice conversion")
+
+    return pdf_path
+
 
 def extract_text_from_pdf(path: str) -> str:
+    """Extract text from PDF — kept for the feedback endpoint."""
     text_parts = []
     with pdfplumber.open(path) as pdf:
         for page in pdf.pages:
@@ -90,28 +130,59 @@ def extract_text_from_pdf(path: str) -> str:
                 text_parts.append(text)
     return "\n\n".join(text_parts)
 
+
 def extract_text_from_docx(path: str) -> str:
+    """Extract text from DOCX — kept for the feedback endpoint."""
     doc = DocxDocument(path)
     paragraphs = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
     return "\n\n".join(paragraphs)
 
-# ── Grading ───────────────────────────────────────────────────────────────────
 
-SYSTEM_PROMPT = """You are an academic assessor evaluating apprenticeship coursework against KSB criteria.
+# ── Grading (multimodal PDF) ─────────────────────────────────────────────────
+
+SYSTEM_PROMPT = """You are a rigorous UK academic assessor evaluating Level 7 apprenticeship coursework against KSB criteria. You must grade fairly but critically — do NOT inflate grades.
+
+You are receiving the student's submission as a PDF document. You can see the FULL document including all text, images, diagrams, charts, tables, code snippets, screenshots, and figures.
 
 CRITICAL RULES:
-1. ONLY use evidence from the SUBMISSION TEXT provided
+1. ONLY use evidence from the SUBMISSION DOCUMENT provided
 2. NEVER invent quotes, company names, or technical details
 3. If evidence is missing, write NOT FOUND
-4. Grade as REFERRAL only when evidence is clearly absent or fundamentally wrong
+4. When referencing evidence, describe WHERE in the document you found it (section, page, figure)
+5. Consider VISUAL evidence — diagrams, charts, screenshots, code — not just written text
 
-GRADING SCALE:
-- REFERRAL: Pass criteria NOT met (significant gaps, missing evidence)
-- PASS: Pass criteria met (basic requirements satisfied)
-- MERIT: Pass AND Merit criteria substantially met"""
+EVIDENCE QUALITY RULES — apply these strictly:
+6. DEMONSTRATED evidence (code, screenshots, implemented artefacts, real outputs) is stronger than DESCRIBED evidence (plans, proposals, "I would do X")
+7. Saying "I would do X in a workplace" is NOT the same as showing you did X — grade what IS shown, not what is promised
+8. Synthetic or dummy data is acceptable for academic submissions BUT it limits the strength of evidence for KSBs requiring real-world data manipulation, collection, or stakeholder impact. A synthetic dataset can still demonstrate methodology but should not automatically receive MERIT for complexity or real-world applicability
+9. Theoretical designs (e.g. proposed architectures, future plans) without implementation evidence should be graded on the quality of the design rationale, but the lack of implementation should be noted and should generally cap the grade at PASS unless the design is exceptionally well-justified with trade-offs, alternatives considered, and clear technical depth
+10. Well-written prose alone does not justify MERIT — MERIT requires genuine depth, critical thinking, and evidence that goes meaningfully beyond the pass criteria
 
-def grade_ksb(ksb: dict, report_text: str) -> dict:
-    prompt = f"""Evaluate this student's work against the KSB criterion below.
+GRADING SCALE — apply conservatively:
+- REFERRAL: Pass criteria NOT met (significant gaps, missing or fundamentally wrong evidence)
+- PASS: Pass criteria met (basic requirements satisfied, competence demonstrated at a foundational level)
+- MERIT: Pass criteria AND Merit criteria SUBSTANTIALLY met with strong, concrete evidence — not just well-articulated descriptions. MERIT should feel genuinely earned, not given because the writing is competent
+
+COMMON GRADE INFLATION TRAPS — avoid these:
+- Do not give MERIT just because the report is well-structured or professionally written
+- Do not give MERIT for breadth of coverage if the depth is shallow
+- Do not treat a plan or proposal as equivalent to a demonstrated implementation
+- Do not ignore missing practical evidence (code, tool outputs, real data) when the KSB requires demonstration of a skill
+- If the improvements field would be empty or trivial, you are probably grading too generously — every submission has meaningful areas for development"""
+
+
+def grade_ksb(ksb: dict, pdf_bytes: bytes) -> dict:
+    """
+    Grade a single KSB by sending the full PDF to Gemini as multimodal input.
+
+    Google docs confirm:
+    - Gemini 2.5 Flash supports PDF up to 50MB / 1000 pages (258 tokens/page)
+    - PDFs processed with native vision — text + images + diagrams + charts
+    - Part.from_bytes(data=pdf_bytes, mime_type='application/pdf') for inline PDF
+    - Best practice: place the PDF before the text prompt
+    """
+    prompt = f"""Evaluate the student's submission (provided as the PDF above) against this KSB criterion.
+You must grade fairly but critically. Do NOT inflate grades.
 
 ## KSB: {ksb['code']} - {ksb['title']}
 
@@ -121,14 +192,15 @@ def grade_ksb(ksb: dict, report_text: str) -> dict:
 | MERIT | {ksb['merit_criteria']} |
 | REFERRAL | {ksb['referral_criteria']} |
 
-## SUBMISSION TEXT
-{report_text[:8000]}
-
 ## YOUR TASK
-1. List evidence found (quote relevant sections)
-2. Assess pass criteria (MET / NOT MET)
-3. Assess merit criteria (MET / NOT MET)
-4. Provide grade decision
+1. Examine the FULL document including any diagrams, charts, code, screenshots, and tables
+2. For each piece of evidence, classify it as:
+   - DEMONSTRATED (actually shown: code, outputs, screenshots, implemented artefacts, real results)
+   - DESCRIBED (written about: plans, proposals, theoretical designs, "I would do X")
+3. Assess pass criteria (MET / NOT MET) — explain why
+4. Assess merit criteria (MET / NOT MET) — be strict. MERIT requires concrete depth beyond pass, not just good writing
+5. Provide your grade decision with honest rationale
+6. Always provide at least 2 genuine, specific improvements — if you cannot think of any, you are grading too generously
 
 Respond with ONLY this JSON:
 {{
@@ -136,20 +208,24 @@ Respond with ONLY this JSON:
   "confidence": "HIGH" or "MEDIUM" or "LOW",
   "pass_criteria_met": true or false,
   "merit_criteria_met": true or false,
-  "evidence": ["quote 1 from submission", "quote 2 from submission"],
+  "evidence": ["evidence 1 — state if DEMONSTRATED or DESCRIBED", "evidence 2 — state if DEMONSTRATED or DESCRIBED"],
   "strengths": ["strength 1", "strength 2"],
-  "improvements": ["improvement 1", "improvement 2"],
-  "rationale": "2-3 sentence explanation of the grade"
+  "improvements": ["specific improvement 1", "specific improvement 2"],
+  "rationale": "2-3 sentence explanation of the grade. If awarding MERIT, explicitly state what concrete evidence elevates it beyond PASS. If awarding PASS, explain what would be needed for MERIT."
 }}"""
+
+    pdf_part = types.Part.from_bytes(
+        data=pdf_bytes,
+        mime_type="application/pdf"
+    )
 
     response = client_genai.models.generate_content(
         model="gemini-2.5-flash",
-        contents=prompt,
+        contents=[pdf_part, prompt],
         config={"system_instruction": SYSTEM_PROMPT}
     )
 
     raw = response.text.strip()
-    # Strip markdown code blocks if present
     if raw.startswith("```"):
         raw = raw.split("```")[1]
         if raw.startswith("json"):
@@ -159,7 +235,6 @@ Respond with ONLY this JSON:
     try:
         result = json.loads(raw)
     except json.JSONDecodeError:
-        # Fallback
         result = {
             "grade": "REFERRAL",
             "confidence": "LOW",
@@ -174,6 +249,75 @@ Respond with ONLY this JSON:
     result["ksb_code"] = ksb["code"]
     result["ksb_title"] = ksb["title"]
     return result
+
+
+# ── Harvard Referencing Quality Check ─────────────────────────────────────────
+
+def check_referencing(pdf_bytes: bytes) -> dict:
+    """
+    Assess the quality of Harvard referencing in the submission.
+    Runs once per submission (not per KSB).
+    """
+    ref_prompt = """Analyse the academic referencing in this student submission (provided as the PDF above).
+
+Assess the following aspects:
+
+1. PRESENCE: Does the report include a references section or bibliography?
+2. STYLE: Are references formatted in Harvard style (Author, Year) with in-text citations?
+3. IN-TEXT CITATIONS: Are claims, frameworks, and external ideas cited in the body text using (Author, Year) format?
+4. REFERENCE LIST: Is there a properly formatted reference list at the end?
+5. QUALITY: Are the sources appropriate for Level 7 academic work (peer-reviewed papers, official documentation, established frameworks — not just websites or blogs)?
+6. CONSISTENCY: Is the Harvard formatting applied consistently throughout (capitalisation, italics, punctuation, ordering)?
+7. COMPLETENESS: Are all in-text citations matched to a reference list entry, and vice versa?
+
+Respond with ONLY this JSON:
+{
+  "has_references_section": true or false,
+  "harvard_style_used": true or false,
+  "in_text_citations_present": true or false,
+  "in_text_citation_count": number (approximate count of unique in-text citations found),
+  "reference_list_count": number (count of entries in the reference list),
+  "source_quality": "STRONG" or "ADEQUATE" or "WEAK" or "NONE",
+  "consistency": "CONSISTENT" or "MINOR_ISSUES" or "INCONSISTENT" or "NOT_APPLICABLE",
+  "issues": ["specific issue 1", "specific issue 2"],
+  "overall_rating": "EXCELLENT" or "GOOD" or "ADEQUATE" or "POOR" or "MISSING",
+  "summary": "2-3 sentence assessment of the referencing quality"
+}"""
+
+    pdf_part = types.Part.from_bytes(
+        data=pdf_bytes,
+        mime_type="application/pdf"
+    )
+
+    try:
+        response = client_genai.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=[pdf_part, ref_prompt],
+            config={"system_instruction": "You are an academic quality assessor checking Harvard referencing standards in student submissions. Be thorough and specific."}
+        )
+
+        raw = response.text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        raw = raw.strip()
+
+        return json.loads(raw)
+    except Exception:
+        return {
+            "has_references_section": False,
+            "harvard_style_used": False,
+            "in_text_citations_present": False,
+            "in_text_citation_count": 0,
+            "reference_list_count": 0,
+            "source_quality": "NONE",
+            "consistency": "NOT_APPLICABLE",
+            "issues": ["Could not assess referencing — evaluation failed"],
+            "overall_rating": "MISSING",
+            "summary": "Referencing quality could not be assessed."
+        }
+
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 
@@ -201,22 +345,38 @@ async def assess(
         tmp.write(await file.read())
         tmp_path = tmp.name
 
+    pdf_path = None
+
     try:
-        if suffix == ".pdf":
-            report_text = extract_text_from_pdf(tmp_path)
+        # Step 1: Get canonical PDF
+        if suffix == ".docx":
+            pdf_path = convert_docx_to_pdf(tmp_path)
         else:
-            report_text = extract_text_from_docx(tmp_path)
+            pdf_path = tmp_path
+
+        # Step 2: Read PDF bytes for Gemini multimodal input
+        pdf_bytes = Path(pdf_path).read_bytes()
+
+        if len(pdf_bytes) < 1000:
+            raise HTTPException(status_code=400, detail="Document appears to be empty or too short")
+
+        if len(pdf_bytes) > 50 * 1024 * 1024:
+            raise HTTPException(status_code=400, detail="Document exceeds 50MB size limit")
+
+        # Step 3: Grade each KSB with multimodal PDF
+        ksbs = MODULES[module]["ksbs"]
+        results = []
+        for ksb in ksbs:
+            result = grade_ksb(ksb, pdf_bytes)
+            results.append(result)
+
+        # Step 4: Check Harvard referencing quality (once per submission)
+        referencing = check_referencing(pdf_bytes)
+
     finally:
         Path(tmp_path).unlink(missing_ok=True)
-
-    if len(report_text.strip()) < 200:
-        raise HTTPException(status_code=400, detail="Document appears to be empty or too short")
-
-    ksbs = MODULES[module]["ksbs"]
-    results = []
-    for ksb in ksbs:
-        result = grade_ksb(ksb, report_text)
-        results.append(result)
+        if pdf_path and pdf_path != tmp_path:
+            Path(pdf_path).unlink(missing_ok=True)
 
     grades = [r["grade"] for r in results]
     merit_count = grades.count("MERIT")
@@ -240,5 +400,125 @@ async def assess(
             "pass": pass_count,
             "referral": referral_count
         },
+        "referencing": referencing,
         "results": results
     }
+
+
+# ─── Feedback endpoint ───────────────────────────────────────────────────────
+
+@app.post("/feedback")
+async def generate_feedback(req: FeedbackRequest):
+    results = req.results
+    feedback_type = req.feedback_type
+    learner_name = req.learner_name
+
+    module_name = results.get("module_name", "Unknown Module")
+    overall = results.get("overall_recommendation", "UNKNOWN")
+    summary = results.get("summary", {})
+    ksb_results = results.get("results", [])
+
+    merit_ksbs   = [r for r in ksb_results if r.get("grade") == "MERIT"]
+    pass_ksbs    = [r for r in ksb_results if r.get("grade") == "PASS"]
+    referral_ksbs = [r for r in ksb_results if r.get("grade") == "REFERRAL"]
+
+    def ksb_lines(ksbs):
+        lines = []
+        for r in ksbs:
+            strengths = "; ".join(r.get("strengths", []))
+            improvements = "; ".join(r.get("improvements", []))
+            lines.append(
+                f"- {r['ksb_code']} ({r['ksb_title']}): {r.get('rationale', '')} "
+                f"Strengths: {strengths}. Areas for development: {improvements}."
+            )
+        return "\n".join(lines) if lines else "None"
+
+    assessment_summary = f"""
+Module: {module_name}
+Learner: {learner_name}
+Overall Recommendation: {overall}
+Total KSBs: {summary.get('total', 0)} | Merit: {summary.get('merit', 0)} | Pass: {summary.get('pass', 0)} | Referral: {summary.get('referral', 0)}
+
+MERIT KSBs:
+{ksb_lines(merit_ksbs)}
+
+PASS KSBs:
+{ksb_lines(pass_ksbs)}
+
+REFERRAL KSBs (requiring further development):
+{ksb_lines(referral_ksbs)}
+"""
+
+    type_prompts = {
+        "formal_letter": f"""
+Write a formal, professional feedback letter addressed to {learner_name} regarding their {module_name} coursework assessment.
+The letter should:
+- Open with a formal salutation
+- Clearly state the overall assessment outcome ({overall})
+- Acknowledge the KSBs where merit was demonstrated, with specific praise
+- Address KSBs where a pass was achieved, noting solid performance
+- Sensitively but clearly explain any KSBs requiring further development (referrals), with specific guidance
+- Close with an encouraging and professional sign-off
+- Be written in formal academic/professional English
+- Be detailed and personalised — avoid generic phrases
+""",
+        "developmental": f"""
+Write a detailed developmental summary for {learner_name} based on their {module_name} coursework assessment.
+The summary should:
+- Begin with an overview of overall performance ({overall})
+- Highlight key strengths demonstrated across the KSBs in detail
+- Identify clear patterns in areas requiring development
+- Provide specific, constructive and actionable developmental feedback
+- Be written in a supportive, professional tone
+- Be structured with clear sections (e.g. Overview, Strengths, Areas for Development)
+- Be detailed enough to be genuinely useful for the learner's professional development
+""",
+        "action_plan": f"""
+Write a detailed, structured learner action plan for {learner_name} based on their {module_name} coursework assessment (overall: {overall}).
+The action plan should:
+- Begin with a brief context statement about the assessment
+- For each KSB that received REFERRAL, provide a specific numbered action item with:
+  * What needs to be improved
+  * Specific steps the learner should take
+  * Suggested resources or approaches
+  * A suggested timeframe (e.g. within 2 weeks, within 1 month)
+- For PASS KSBs, suggest one enhancement action to push toward merit level
+- Close with a motivating statement about next steps
+- Be practical, specific and achievable
+""",
+        "brief_summary": f"""
+Write a concise but comprehensive assessment summary for {learner_name}'s {module_name} coursework.
+The summary should:
+- Be no longer than 3-4 paragraphs
+- State the overall outcome ({overall}) clearly in the first sentence
+- Summarise the key strengths briefly
+- Summarise the key areas for development briefly
+- End with a clear recommendation or next step
+- Be written in plain, professional English suitable for sharing with the learner
+""",
+    }
+
+    type_prompt = type_prompts.get(feedback_type, type_prompts["brief_summary"])
+
+    full_prompt = f"""
+You are an expert academic assessor writing feedback for an apprenticeship programme.
+Based on the following assessment data, {type_prompt}
+
+ASSESSMENT DATA:
+{assessment_summary}
+
+Important:
+- Write ONLY the feedback document itself — no preamble, no meta-commentary
+- Do not include phrases like "Here is the feedback" or "As requested"
+- Make it specific to the actual KSB results provided — do not be generic
+- Use the learner's name ({learner_name}) naturally throughout
+"""
+
+    try:
+        response = client_genai.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=full_prompt,
+        )
+        return {"feedback": response.text}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Feedback generation failed: {str(e)}")
