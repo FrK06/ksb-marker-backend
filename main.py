@@ -225,7 +225,7 @@ Respond with ONLY this JSON:
     response = client_genai.models.generate_content(
         model="gemini-2.5-flash",
         contents=[pdf_part, prompt],
-        config={"system_instruction": SYSTEM_PROMPT}
+        config={"system_instruction": SYSTEM_PROMPT, "temperature": 0}
     )
 
     raw = response.text.strip()
@@ -296,7 +296,7 @@ Respond with ONLY this JSON:
         response = client_genai.models.generate_content(
             model="gemini-2.5-flash",
             contents=[pdf_part, ref_prompt],
-            config={"system_instruction": "You are an academic quality assessor checking Harvard referencing standards in student submissions. Be thorough and specific."}
+            config={"system_instruction": "You are an academic quality assessor checking Harvard referencing standards in student submissions. Be thorough and specific.", "temperature": 0}
         )
 
         raw = response.text.strip()
