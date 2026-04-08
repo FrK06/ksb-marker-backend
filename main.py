@@ -454,50 +454,122 @@ REFERRAL KSBs (requiring further development):
 
     type_prompts = {
         "formal_letter": f"""
-Write a formal, professional feedback letter addressed to {learner_name} regarding their {module_name} coursework assessment.
-The letter should:
-- Open with a formal salutation
-- Clearly state the overall assessment outcome ({overall})
-- Acknowledge the KSBs where merit was demonstrated, with specific praise
-- Address KSBs where a pass was achieved, noting solid performance
-- Sensitively but clearly explain any KSBs requiring further development (referrals), with specific guidance
-- Close with an encouraging and professional sign-off
-- Be written in formal academic/professional English
-- Be detailed and personalised — avoid generic phrases
+Write a formal feedback letter addressed to {learner_name} regarding their {module_name} coursework assessment (overall: {overall}).
+
+This is a professional letter that a learner could keep as a formal record of their assessment outcome. It should be clear, respectful, and constructive.
+
+STYLE RULES:
+- Write in PLAIN TEXT only. No markdown, no bold, no italics, no asterisks, no underscores, no special formatting
+- Do NOT use dashes as punctuation. Use commas, full stops, or semicolons instead
+- Keep sentences SHORT and clear. Maximum 25 to 30 words per sentence
+- Do NOT use excessive superlatives. Keep praise genuine but measured
+- Total length: 400 to 600 words. This is a HARD limit
+
+STRUCTURE:
+
+1. SALUTATION AND OUTCOME (2 to 3 sentences). Open with "Dear {learner_name}," then state the module and the overall assessment outcome clearly and directly. Set a respectful tone.
+
+2. STRENGTHS (one paragraph, 4 to 6 sentences). Acknowledge the strongest areas of the submission. Group MERIT and strong PASS KSBs thematically rather than listing each one individually. Reference 2 to 3 KSB codes naturally within the prose. Be specific about what was done well but keep it concise.
+
+3. AREAS FOR DEVELOPMENT (one paragraph, 4 to 6 sentences). Address REFERRAL KSBs sensitively but honestly. Describe the overall theme of what needs improving (e.g. "practical demonstration of your designs") rather than addressing each referred KSB in its own sentence. You may reference 2 to 3 KSB codes in parentheses to support your point but do NOT write "KSB X requires... KSB Y necessitates... KSB Z requires..." as separate sentences. That is a list, not a paragraph. Explain clearly what is needed without being punitive.
+
+4. CLOSING (2 to 3 sentences). Encourage the learner. Express confidence in their ability to improve. Invite them to seek support from their tutor or assessor. Sign off formally with "Kind regards," followed by "The Assessment Team" on the next line.
+
+WHAT TO AVOID:
+- Do NOT write a separate paragraph or bullet point for every KSB
+- Do NOT include detailed action plans or step by step guidance (that is what the Action Plan feedback type is for)
+- Do NOT use headers, sub-headers, or horizontal rules within the letter
+- Do NOT exceed 600 words
+- Do NOT use "Sincerely," as the sign off. Use "Kind regards," instead
 """,
         "developmental": f"""
-Write a detailed developmental summary for {learner_name} based on their {module_name} coursework assessment.
-The summary should:
-- Begin with an overview of overall performance ({overall})
-- Highlight key strengths demonstrated across the KSBs in detail
-- Identify clear patterns in areas requiring development
-- Provide specific, constructive and actionable developmental feedback
-- Be written in a supportive, professional tone
-- Be structured with clear sections (e.g. Overview, Strengths, Areas for Development)
-- Be detailed enough to be genuinely useful for the learner's professional development
+Write a developmental summary for {learner_name} based on their {module_name} coursework assessment (overall: {overall}).
+
+This document helps the learner understand their professional development trajectory. It identifies patterns across their work, not individual KSB grades. Think of it as a mentor reflecting on the learner's growth and guiding their next steps.
+
+STYLE RULES:
+- Write in PLAIN TEXT only. No markdown, no bold, no italics, no asterisks, no underscores, no special formatting
+- Do NOT use dashes as punctuation. Use commas, full stops, or semicolons instead
+- Keep sentences SHORT and clear. Maximum 25 to 30 words per sentence
+- Do NOT use excessive superlatives. Keep the tone supportive but honest
+- Total length: 400 to 600 words. This is a HARD limit
+
+STRUCTURE:
+
+1. OVERVIEW (2 to 3 sentences). State the module, overall outcome, and a brief characterisation of the learner's profile (e.g. "Your work shows a strong conceptual thinker who now needs to build confidence in practical execution").
+
+2. STRENGTHS AS A PRACTITIONER (one paragraph, 4 to 6 sentences). Identify the patterns across their strongest KSBs. Do NOT list each KSB separately. Instead, describe 2 to 3 professional qualities the learner has demonstrated (e.g. "systematic thinking", "strong compliance awareness", "clear stakeholder communication"). Reference KSB codes naturally to support the observations.
+
+3. DEVELOPMENT AREAS (one paragraph, 4 to 6 sentences). Identify the patterns across their weakest KSBs. Again, group thematically. Describe the underlying skill gap rather than restating the rubric criteria (e.g. "bridging the gap between planning and execution" rather than "K25, S15, S19 all had TBD tables"). Be constructive and frame development positively.
+
+4. WHAT THIS MEANS FOR YOUR CAREER (one paragraph, 3 to 4 sentences). Connect the strengths and development areas to the learner's broader professional growth. How do the patterns identified relate to their progression as a data scientist, cloud engineer, or AI practitioner? What should they prioritise in their next 3 to 6 months of professional development?
+
+5. CLOSING (1 to 2 sentences). Warm, encouraging, and forward looking.
+
+WHAT TO AVOID:
+- Do NOT write a separate paragraph for every KSB
+- Do NOT repeat the same point multiple times across different KSBs
+- Do NOT include detailed action steps (that is the Action Plan's job)
+- Do NOT use headers or sub-headers within the document
+- Do NOT exceed 600 words
 """,
         "action_plan": f"""
-Write a detailed, structured learner action plan for {learner_name} based on their {module_name} coursework assessment (overall: {overall}).
-The action plan should:
-- Begin with a brief context statement about the assessment
-- For each KSB that received REFERRAL, provide a specific numbered action item with:
-  * What needs to be improved
-  * Specific steps the learner should take
-  * Suggested resources or approaches
-  * A suggested timeframe (e.g. within 2 weeks, within 1 month)
-- For PASS KSBs, suggest one enhancement action to push toward merit level
-- Close with a motivating statement about next steps
-- Be practical, specific and achievable
+Write a learner action plan for {learner_name} based on their {module_name} coursework assessment (overall: {overall}).
+
+This is a practical, focused document that tells the learner exactly what to do next. It should feel like a coach giving clear instructions, not an examiner writing a report.
+
+STYLE RULES:
+- Write in PLAIN TEXT only. No markdown, no bold, no italics, no asterisks, no underscores, no special formatting
+- Do NOT use dashes as punctuation. Use commas, full stops, or semicolons instead
+- Keep sentences SHORT and clear. Maximum 25 to 30 words per sentence
+- Do NOT use excessive superlatives. Keep the tone warm but measured
+- Total length: 400 to 600 words. This is a HARD limit
+
+STRUCTURE:
+
+1. CONTEXT (2 to 3 sentences). State the module, overall outcome, and a one sentence summary of the main theme (e.g. "Your Machine Learning Cloud Computing coursework has received an overall outcome of Referral. Your theoretical work is strong but the main gap is practical demonstration."). Do NOT open with "Dear" or any letter-style salutation. This is an action plan, not a letter. Start directly with the context.
+
+2. PRIORITY ACTIONS (this is the core of the plan). Group REFERRAL KSBs thematically rather than listing each one separately. Write 2 to 3 short paragraphs, each covering a theme (e.g. "Executing your PoC and capturing real results" might cover S15, K25, and S19 together). For each theme:
+   - State what needs to happen in plain language
+   - Give 1 to 2 concrete steps
+   - Suggest a realistic timeframe (e.g. "within 2 to 3 weeks")
+   Do NOT write sub-bullets, resource lists, or multi-level nested structures. Keep it direct.
+
+3. QUICK WINS (one short paragraph). For the strongest PASS KSBs, suggest 2 to 3 brief enhancements that would push toward Merit. Group them thematically. One sentence per suggestion is enough.
+
+4. CLOSING (1 to 2 sentences). Acknowledge the learner's strengths briefly and encourage them to reach out for support.
+
+WHAT TO AVOID:
+- Do NOT write a separate numbered action item for every single KSB
+- Do NOT include "Suggested Resources" or "Suggested Approaches" sub-sections
+- Do NOT use headers, sub-headers, or horizontal rules
+- Do NOT repeat the same improvement point across multiple KSBs (e.g. "populate TBD tables" only needs saying once)
+- Do NOT exceed 600 words
 """,
         "brief_summary": f"""
-Write a concise but comprehensive assessment summary for {learner_name}'s {module_name} coursework.
-The summary should:
-- Be no longer than 3-4 paragraphs
-- State the overall outcome ({overall}) clearly in the first sentence
-- Summarise the key strengths briefly
-- Summarise the key areas for development briefly
-- End with a clear recommendation or next step
-- Be written in plain, professional English suitable for sharing with the learner
+Write a brief assessment summary for {learner_name}'s {module_name} coursework (overall: {overall}).
+
+This is the shortest feedback format. It is designed to be shared quickly with the learner or their employer as a snapshot of the assessment outcome. Think of it as an executive summary.
+
+STYLE RULES:
+- Write in PLAIN TEXT only. No markdown, no bold, no italics, no asterisks, no underscores, no special formatting
+- Do NOT use dashes as punctuation. Use commas, full stops, or semicolons instead
+- Keep sentences SHORT and clear. Maximum 25 to 30 words per sentence
+- Do NOT use excessive superlatives
+- Total length: 150 to 250 words maximum. This is a HARD limit. Brevity is the entire point of this format
+
+STRUCTURE (3 short paragraphs, no headers):
+
+1. OUTCOME (2 to 3 sentences). State the module, overall outcome, and the EXACT grade breakdown from the assessment data. Use the precise numbers provided in the summary section (total, merit, pass, referral). Do NOT guess or calculate these yourself. Copy them directly from the data.
+
+2. KEY THEMES (3 to 4 sentences). One or two sentences on what was done well, grouped thematically. One or two sentences on the main development area, also grouped thematically. Reference 2 to 3 KSB codes at most.
+
+3. NEXT STEP (1 to 2 sentences). A single clear recommendation for what the learner should focus on next.
+
+WHAT TO AVOID:
+- Do NOT list individual KSBs with descriptions
+- Do NOT include detailed guidance or action steps
+- Do NOT exceed 250 words. If the output is longer than 3 short paragraphs, it is too long
 """,
         "tag_feedback": f"""
 Write feedback for {learner_name} on their {module_name} coursework (overall: {overall}) using the TAG model from QA Apprenticeships.
@@ -520,7 +592,7 @@ BALANCE — this is equally critical:
 
 STRUCTURE (use these as your guide, not as visible headers):
 
-1. GREETING — One warm sentence: "Hi {learner_name}, thank you for your submission..." and state the overall outcome simply.
+1. GREETING — One warm sentence. If a real name is provided, use "Hi {learner_name}, thank you for your submission..." If the name is "the learner", just write "Hi, thank you for your submission..." without using "the learner" as a name. State the overall outcome simply.
 
 2. TELL — One short paragraph of specific praise. Pick the 2–3 strongest areas, group them thematically, reference evidence. Do NOT individually address every PASS and MERIT KSB. Keep it focused and genuine.
 
@@ -533,7 +605,7 @@ STRUCTURE (use these as your guide, not as visible headers):
 
 4. GIVE — One concise paragraph of practical IAG (Information, Advice, Guidance). For REFERRAL KSBs: state briefly what's needed (e.g. "The main thing to focus on is turning your excellent designs into demonstrated evidence — screenshots of executed SageMaker jobs, actual metrics from training runs, and a working code repository"). For the strongest PASS KSBs: one sentence suggesting what would push toward Merit. Keep it brief and actionable.
 
-5. CLOSING — End warmly and personally, like a real DLC would: "Looking forward to seeing your next submission, {learner_name}, keep up the great work!" or "I'm really looking forward to seeing these designs come to life in your next iteration." Do NOT end with a generic "Best regards," — make it feel human.
+5. CLOSING — End warmly and personally, like a real DLC would: "Looking forward to seeing your next submission, keep up the great work!" or "I'm really looking forward to seeing these designs come to life in your next iteration." Do NOT end with a generic "Best regards,". Make it feel human. If the name is "the learner", do NOT use it in the closing sentence.
 
 WHAT TO AVOID:
 - Do NOT write a structured report with headers, sub-headers, and bullet lists
@@ -566,7 +638,8 @@ Important:
 - Write ONLY the feedback document itself — no preamble, no meta-commentary
 - Do not include phrases like "Here is the feedback" or "As requested"
 - Make it specific to the actual KSB results provided — do not be generic
-- Use the learner's name ({learner_name}) naturally throughout
+- Use the learner's name ({learner_name}) naturally throughout. If the name is "the learner", do not write "Dear the learner" or "Hi the learner". Instead use "Dear Learner" or "Hi there" as appropriate for the format
+- Write in British English throughout (e.g. organisation not organization, utilisation not utilization, behaviour not behavior, analyse not analyze, colour not color, programme not program, centre not center, defence not defense, practise not practice for the verb)
 """
 
     try:
