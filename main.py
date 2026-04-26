@@ -3,7 +3,7 @@ from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Any
+from typing import Any, List, Literal, Optional
 from google import genai
 from google.genai import types
 import pdfplumber
@@ -22,6 +22,46 @@ class FeedbackRequest(BaseModel):
     results: dict
     feedback_type: str
     learner_name: str = "the learner"
+
+# ── Structured Output Schemas ─────────────────────────────────────────────────
+# These constrain Gemini responses via response_schema so we never have to
+# string-parse or guess at output shape. The SDK validates against these.
+
+class KSBGradingSchema(BaseModel):
+    """Schema for a single KSB grading response from Gemini."""
+    grade: Literal["MERIT", "PASS", "REFERRAL"]
+    confidence: Literal["HIGH", "MEDIUM", "LOW"]
+    pass_criteria_met: bool
+    merit_criteria_met: bool
+    evidence: List[str]
+    strengths: List[str]
+    improvements: List[str]
+    rationale: str
+
+
+class ReferencingSchema(BaseModel):
+    """Schema for the Harvard referencing check response from Gemini."""
+    has_references_section: bool
+    harvard_style_used: bool
+    in_text_citations_present: bool
+    in_text_citation_count: int
+    reference_list_count: int
+    source_quality: Literal["STRONG", "ADEQUATE", "WEAK", "NONE"]
+    consistency: Literal["CONSISTENT", "MOSTLY_CONSISTENT", "INCONSISTENT", "N/A"]
+    issues: List[str]
+    overall_rating: Literal["EXCELLENT", "GOOD", "ADEQUATE", "POOR", "MISSING"]
+    summary: str
+
+
+class OverallEvaluationSchema(BaseModel):
+    """Schema for the post-grading synthesis response from Gemini."""
+    overall_summary: str
+    overall_rationale: str
+    report_strengths: List[str]
+    priority_improvements: List[str]
+    coherence_rating: Literal["STRONG", "ADEQUATE", "WEAK"]
+    evidence_quality_rating: Literal["STRONG", "MIXED", "WEAK"]
+    confidence_in_recommendation: Literal["HIGH", "MEDIUM", "LOW"]
 
 # ── KSB Rubrics ──────────────────────────────────────────────────────────────
 
@@ -183,6 +223,10 @@ def grade_ksb(ksb: dict, pdf_bytes: bytes) -> dict:
     - PDFs processed with native vision — text + images + diagrams + charts
     - Part.from_bytes(data=pdf_bytes, mime_type='application/pdf') for inline PDF
     - Best practice: place the PDF before the text prompt
+
+    Uses response_schema for guaranteed-valid JSON output; failures are now
+    surfaced explicitly via evaluation_status='failed' rather than fabricated
+    as REFERRAL grades.
     """
     prompt = f"""Evaluate the student's submission (provided as the PDF above) against this KSB criterion.
 You must grade fairly but critically. Do NOT inflate grades.
@@ -222,31 +266,32 @@ Respond with ONLY this JSON:
         mime_type="application/pdf"
     )
 
-    response = client_genai.models.generate_content(
-        model="gemini-2.5-flash",
-        contents=[pdf_part, prompt],
-        config={"system_instruction": SYSTEM_PROMPT, "temperature": 0}
-    )
-
-    raw = response.text.strip()
-    if raw.startswith("```"):
-        raw = raw.split("```")[1]
-        if raw.startswith("json"):
-            raw = raw[4:]
-    raw = raw.strip()
-
     try:
-        result = json.loads(raw)
-    except json.JSONDecodeError:
+        response = client_genai.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=[pdf_part, prompt],
+            config={
+                "system_instruction": SYSTEM_PROMPT,
+                "temperature": 0,
+                "response_mime_type": "application/json",
+                "response_schema": KSBGradingSchema,
+            }
+        )
+
+        parsed: Optional[KSBGradingSchema] = response.parsed
+        if parsed is None:
+            raise ValueError("Model returned no parsed result (possible content filter or empty response)")
+
+        result = parsed.model_dump()
+        result["evaluation_status"] = "completed"
+
+    except Exception as e:
+        # Real failure mode: API error, schema mismatch, model refusal, timeout.
+        # Surface this explicitly instead of fabricating a REFERRAL.
+        print(f"[grade_ksb] FAILED for {ksb.get('code')}: {type(e).__name__}: {e}")
         result = {
-            "grade": "REFERRAL",
-            "confidence": "LOW",
-            "pass_criteria_met": False,
-            "merit_criteria_met": False,
-            "evidence": [],
-            "strengths": [],
-            "improvements": ["Could not parse evaluation response"],
-            "rationale": "Evaluation failed - please retry"
+            "evaluation_status": "failed",
+            "evaluation_error": f"{type(e).__name__}: {str(e)[:200]}",
         }
 
     result["ksb_code"] = ksb["code"]
@@ -260,6 +305,8 @@ def check_referencing(pdf_bytes: bytes) -> dict:
     """
     Assess the quality of Harvard referencing in the submission.
     Runs once per submission (not per KSB).
+    Uses response_schema for guaranteed
+    valid output. Failures are surfaced via evaluation_status='failed'.
     """
     ref_prompt = """Analyse the academic referencing in this student submission (provided as the PDF above).
 
@@ -296,31 +343,164 @@ Respond with ONLY this JSON:
         response = client_genai.models.generate_content(
             model="gemini-2.5-flash",
             contents=[pdf_part, ref_prompt],
-            config={"system_instruction": "You are an academic quality assessor checking Harvard referencing standards in student submissions. Be thorough and specific.", "temperature": 0}
+            config={
+                "temperature": 0,
+                "response_mime_type": "application/json",
+                "response_schema": ReferencingSchema,
+            }
         )
 
-        raw = response.text.strip()
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-        raw = raw.strip()
+        parsed: Optional[ReferencingSchema] = response.parsed
+        if parsed is None:
+            raise ValueError("Model returned no parsed result")
 
-        return json.loads(raw)
-    except Exception:
+        result = parsed.model_dump()
+        result["evaluation_status"] = "completed"
+        return result
+
+    except Exception as e:
+        print(f"[check_referencing] FAILED: {type(e).__name__}: {e}")
         return {
+            "evaluation_status": "failed",
+            "evaluation_error": f"{type(e).__name__}: {str(e)[:200]}",
+            # Provide neutral defaults so the UI doesn't crash on missing fields
             "has_references_section": False,
             "harvard_style_used": False,
             "in_text_citations_present": False,
             "in_text_citation_count": 0,
             "reference_list_count": 0,
             "source_quality": "NONE",
-            "consistency": "NOT_APPLICABLE",
-            "issues": ["Could not assess referencing — evaluation failed"],
+            "consistency": "N/A",
+            "issues": ["Referencing check failed — please re-run."],
             "overall_rating": "MISSING",
-            "summary": "Referencing quality could not be assessed."
+            "summary": "Referencing check could not be completed.",
         }
 
+
+# ── Overall Evaluation Synthesis ─────────────────────────────────────────────
+
+def _is_failed(r: dict) -> bool:
+    """A KSB result is failed if its evaluation_status is explicitly 'failed'."""
+    return r.get("evaluation_status") == "failed"
+
+
+def generate_overall_evaluation(
+    overall_recommendation: str,
+    summary: dict,
+    referencing: dict,
+    results: list
+) -> dict:
+    """
+    Post-grading synthesis pass. Produces a holistic, report-level judgement
+    using the structured assessment data (NOT the original PDF). Returns the
+    canonical overall_evaluation block per spec 06 section 7.
+
+    Confidence is deterministically capped when KSB evaluation failures are
+    detected, so the synthesis cannot claim HIGH confidence about an
+    assessment with missing KSB results.
+    """
+    # Detect KSB evaluation failures (structural, no string heuristics)
+    failed_ksbs = [r for r in results if _is_failed(r)]
+    failure_count = len(failed_ksbs)
+    failure_codes = [r.get("ksb_code") for r in failed_ksbs]
+
+    # Compact KSB briefs for synthesis input
+    ksb_briefs = []
+    for r in results:
+        if _is_failed(r):
+            ksb_briefs.append({
+                "code": r.get("ksb_code"),
+                "title": r.get("ksb_title"),
+                "evaluation_status": "failed",
+                "evaluation_error": r.get("evaluation_error", "unknown"),
+            })
+        else:
+            ksb_briefs.append({
+                "code": r.get("ksb_code"),
+                "title": r.get("ksb_title"),
+                "evaluation_status": "completed",
+                "grade": r.get("grade"),
+                "confidence": r.get("confidence"),
+                "rationale": r.get("rationale", ""),
+                "strengths": r.get("strengths", []),
+                "improvements": r.get("improvements", []),
+            })
+
+    synthesis_input = {
+        "overall_recommendation": overall_recommendation,
+        "summary": summary,
+        "referencing": referencing,
+        "evaluation_failure_count": failure_count,
+        "evaluation_failure_codes": failure_codes,
+        "results": ksb_briefs,
+    }
+
+    prompt = f"""You are synthesising a holistic, report-level judgement of a Level 7 apprenticeship coursework submission that has already been graded KSB by KSB. You are NOT re-grading. You are explaining the report as a whole.
+
+ASSESSMENT DATA:
+{json.dumps(synthesis_input, indent=2)}
+
+YOUR TASK:
+Produce a JSON object that summarises the report's overall quality, coherence, evidence strength, and your confidence in the recommendation. Step back and judge the report holistically; do not repeat KSB-level rationale verbatim.
+
+RULES:
+- British English throughout.
+- Do NOT contradict the overall_recommendation.
+- Do NOT invent evidence not implied by the inputs.
+- Keep `overall_summary` to 2 to 3 sentences describing the report at a high level.
+- Keep `overall_rationale` to 2 to 3 sentences explaining WHY the overall_recommendation was reached at report level.
+- `report_strengths`: 2 to 4 short, cross-cutting strengths (NOT per-KSB).
+- `priority_improvements`: 2 to 4 highest-priority cross-cutting improvements.
+
+EVALUATION FAILURE HANDLING (CRITICAL):
+- A KSB with `evaluation_status: "failed"` is MISSING — it was never assessed. It is NOT a REFERRAL.
+- If `evaluation_failure_count` is 1, `confidence_in_recommendation` MUST be MEDIUM at most. NEVER HIGH.
+- If `evaluation_failure_count` is 2 or more, `confidence_in_recommendation` MUST be LOW.
+- When failures exist, name the affected KSB codes plainly in `overall_rationale` (e.g. "K18 could not be evaluated and should be re-run") and add re-running them to `priority_improvements`.
+
+CONFIDENCE GUIDANCE (when no failures):
+- HIGH: KSB results are mostly consistent, per-KSB confidences are mostly HIGH, evidence base is clear, few borderline KSBs.
+- MEDIUM: A meaningful number of KSBs are borderline or have MEDIUM confidence; some evidence or referencing ambiguity.
+- LOW: Many KSBs are borderline or have LOW confidence; sparse evidence; recommendation could plausibly shift on re-read."""
+
+    try:
+        response = client_genai.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=[prompt],
+            config={
+                "temperature": 0,
+                "response_mime_type": "application/json",
+                "response_schema": OverallEvaluationSchema,
+            }
+        )
+
+        parsed: Optional[OverallEvaluationSchema] = response.parsed
+        if parsed is None:
+            raise ValueError("Model returned no parsed result")
+
+        evaluation = parsed.model_dump()
+
+    except Exception as e:
+        print(f"[generate_overall_evaluation] FAILED: {type(e).__name__}: {e}")
+        evaluation = {
+            "overall_summary": "Overall evaluation synthesis failed; please rely on the per-KSB results.",
+            "overall_rationale": f"The overall recommendation is {overall_recommendation} based on the per-KSB grades and referencing check.",
+            "report_strengths": [],
+            "priority_improvements": ["Synthesis pass failed; please re-run the assessment."],
+            "coherence_rating": "ADEQUATE",
+            "evidence_quality_rating": "MIXED",
+            "confidence_in_recommendation": "LOW",
+        }
+
+    # Deterministic confidence cap based on evaluation failures.
+    # This guarantees correctness even if the model ignores the prompt rule.
+    if failure_count >= 2:
+        evaluation["confidence_in_recommendation"] = "LOW"
+    elif failure_count == 1:
+        if evaluation.get("confidence_in_recommendation") == "HIGH":
+            evaluation["confidence_in_recommendation"] = "MEDIUM"
+
+    return evaluation
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 
@@ -381,28 +561,50 @@ async def assess(
         if pdf_path and pdf_path != tmp_path:
             Path(pdf_path).unlink(missing_ok=True)
 
-    grades = [r["grade"] for r in results]
-    merit_count = grades.count("MERIT")
-    pass_count = grades.count("PASS")
-    referral_count = grades.count("REFERRAL")
+    # Step 5: Compute summary counts from COMPLETED KSBs only
+    completed = [r for r in results if r.get("evaluation_status") == "completed"]
+    failed = [r for r in results if r.get("evaluation_status") == "failed"]
 
-    if referral_count > 0:
+    merit_count = sum(1 for r in completed if r.get("grade") == "MERIT")
+    pass_count = sum(1 for r in completed if r.get("grade") == "PASS")
+    referral_count = sum(1 for r in completed if r.get("grade") == "REFERRAL")
+    failed_count = len(failed)
+
+    # Overall recommendation is computed from completed KSBs.
+    # Failed KSBs do NOT silently force REFERRAL — that would lie about the
+    # learner's work. The synthesis caps confidence to MEDIUM/LOW when failures
+    # exist, and the UI surfaces them for re-run.
+    if not completed:
+        overall = "REFERRAL"  # No KSBs evaluable; conservative default
+    elif referral_count > 0:
         overall = "REFERRAL"
-    elif merit_count > len(grades) / 2:
+    elif merit_count > len(completed) / 2:
         overall = "MERIT"
     else:
         overall = "PASS"
+
+    summary = {
+        "total": len(results),
+        "merit": merit_count,
+        "pass": pass_count,
+        "referral": referral_count,
+        "failed": failed_count,
+    }
+
+    # Step 6: Holistic synthesis — produces overall_evaluation block
+    overall_evaluation = generate_overall_evaluation(
+        overall_recommendation=overall,
+        summary=summary,
+        referencing=referencing,
+        results=results
+    )
 
     return {
         "module": module,
         "module_name": MODULES[module]["name"],
         "overall_recommendation": overall,
-        "summary": {
-            "total": len(results),
-            "merit": merit_count,
-            "pass": pass_count,
-            "referral": referral_count
-        },
+        "summary": summary,
+        "overall_evaluation": overall_evaluation,
         "referencing": referencing,
         "results": results
     }
